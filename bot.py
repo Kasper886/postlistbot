@@ -10,6 +10,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 from telethon import TelegramClient
+from datetime import datetime
 
 
 # ==== ТВОИ ДАННЫЕ ====
@@ -54,6 +55,11 @@ def build_report(posts):
 
 
 async def collect_posts(date_start: datetime.date, date_end: datetime.date):
+    # Получение текущих даты и времени
+    now = datetime.now()
+    # Вывод даты и времени
+    print("Текущие дата и время:", now)
+
     await client.start()
     all_posts = []
     async for msg in client.iter_messages(SOURCE_CHANNEL):
