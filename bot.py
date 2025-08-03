@@ -71,7 +71,6 @@ async def collect_posts(date_start: datetime.date, date_end: datetime.date):
         all_posts.append(f"📌 {msg_date.strftime('%d.%m')} — <a href='{link}'>{preview}</a>")
     return all_posts
 
-
 @dp.message(Command("get_posts"))
 async def get_posts(message: Message):
 
