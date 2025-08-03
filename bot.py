@@ -19,6 +19,7 @@ API_ID = int(os.getenv("API_ID"))
 API_HASH = os.getenv("API_HASH")
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 SOURCE_CHANNEL = os.getenv("SOURCE_CHANNEL")
+ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID"))
 # ======================
 
 bot = Bot(
@@ -27,6 +28,9 @@ bot = Bot(
 )
 dp = Dispatcher()
 client = TelegramClient("session", API_ID, API_HASH)
+
+def is_authorized(message: Message) -> bool:
+    return message.from_user.id == ALLOWED_USER_ID #Проверяем пользователя, имеющего доступ к боту
 
 
 def build_report(posts):
@@ -70,6 +74,11 @@ async def collect_posts(date_start: datetime.date, date_end: datetime.date):
 
 @dp.message(Command("get_posts"))
 async def get_posts(message: Message):
+
+    if not is_authorized(message):
+        await message.answer("❌ У вас нет доступа к этому боту.")
+        return
+
     args = message.text.split()
     if len(args) != 3:
         await message.answer("Формат: /get_posts 28.07 03.08")
@@ -92,6 +101,11 @@ async def get_posts(message: Message):
 
 @dp.message(Command("schedule_report"))
 async def schedule_report(message: Message):
+
+    if not is_authorized(message):
+        await message.answer("❌ У вас нет доступа к этому боту.")
+        return
+
     args = message.text.split()
     if len(args) != 4:
         await message.answer("Формат: /schedule_report 03.08.2025 12:00 @канал")
