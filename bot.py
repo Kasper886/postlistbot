@@ -11,6 +11,7 @@ from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 from telethon import TelegramClient
 from datetime import datetime
+import pytz
 
 
 # ==== ТВОИ ДАННЫЕ ====
@@ -55,27 +56,31 @@ def build_report(posts):
 
 
 async def collect_posts(date_start: datetime.date, date_end: datetime.date):
-    # Получение текущих даты и времени
-    now = datetime.now()
-    # Вывод даты и времени
-    print("Текущие дата и время:", now)
+    moscow_tz = pytz.timezone("Europe/Moscow")
 
     await client.start()
     all_posts = []
     async for msg in client.iter_messages(SOURCE_CHANNEL):
         if not msg.date:
             continue
-        msg_date = msg.date.date()
+
+        # переводим дату сообщения в московское время
+        msg_date = msg.date.astimezone(moscow_tz).date()
+
         if msg_date < date_start or msg_date > date_end:
             continue
+
         text = msg.message or getattr(msg, "text", "") or ""
         text = text.strip()
         if not text:
             continue
+
         preview = html.escape(text.splitlines()[0])
         link = f"https://t.me/{SOURCE_CHANNEL}/{msg.id}"
         all_posts.append(f"📌 {msg_date.strftime('%d.%m')} — <a href='{link}'>{preview}</a>")
+
     return all_posts
+
 
 @dp.message(Command("get_posts"))
 async def get_posts(message: Message):
@@ -106,7 +111,6 @@ async def get_posts(message: Message):
 
 @dp.message(Command("schedule_report"))
 async def schedule_report(message: Message):
-
     if not is_authorized(message):
         await message.answer("❌ У вас нет доступа к этому боту.")
         return
@@ -115,8 +119,10 @@ async def schedule_report(message: Message):
     if len(args) != 4:
         await message.answer("Формат: /schedule_report 03.08.2025 12:00 @канал")
         return
+
     try:
-        run_time = datetime.strptime(args[1] + " " + args[2], "%d.%m.%Y %H:%M")
+        moscow_tz = pytz.timezone("Europe/Moscow")
+        run_time = moscow_tz.localize(datetime.strptime(args[1] + " " + args[2], "%d.%m.%Y %H:%M"))
         channel_username = args[3].lstrip("@")
     except Exception:
         await message.answer("Неверный формат даты или времени.")
@@ -127,7 +133,12 @@ async def schedule_report(message: Message):
 
 
 async def run_scheduled_report(run_time: datetime, channel: str):
-    await asyncio.sleep((run_time - datetime.now()).total_seconds())
+    from datetime import timezone
+
+    utc_now = datetime.now(timezone.utc)
+    sleep_duration = (run_time.astimezone(timezone.utc) - utc_now).total_seconds()
+    await asyncio.sleep(sleep_duration)
+
     date_end = run_time.date()
     date_start = date_end - timedelta(days=6)
     posts = await collect_posts(date_start, date_end)
