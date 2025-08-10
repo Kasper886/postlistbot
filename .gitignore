@@ -1,4 +1,5 @@
 .env
 __pycache__/
 *.pyc
+target_chat.json
 session.session
