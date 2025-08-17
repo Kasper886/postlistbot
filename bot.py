@@ -1,19 +1,24 @@
 import asyncio
-import os, re, json
+import os
+import re
+import json
 from dotenv import load_dotenv
 from telethon.tl.types import Channel
 import html
 from datetime import datetime, timedelta
-from typing import Union, Optional
+from typing import Union, Optional, List
 from aiogram import Bot, Dispatcher, F
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 from telethon import TelegramClient
-from datetime import datetime
 import pytz
+import logging
 
+# Настройка логирования
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 # ==== ТВОИ ДАННЫЕ ====
 load_dotenv()
@@ -91,7 +96,6 @@ def get_target_chat() -> Union[int, str]:
     return TARGET_CHAT_RUNTIME
 # ============================================
 
-
 bot = Bot(
     token=BOT_TOKEN,
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
@@ -100,21 +104,25 @@ dp = Dispatcher()
 client = TelegramClient("session", API_ID, API_HASH)
 
 def is_authorized(message: Message) -> bool:
-    return message.from_user.id == ALLOWED_USER_ID #Проверяем пользователя, имеющего доступ к боту
+    return message.from_user.id == ALLOWED_USER_ID  # Проверяем пользователя, имеющего доступ к боту
 
-
-def build_report(posts):
+def build_report(posts: List[str]) -> List[str]:
+    """
+    Формирует отчёт из списка постов, разбивая текст на части, чтобы не превышать лимит Telegram в 4096 символов.
+    """
     posts.reverse()
     intro = (
-        "<b>📝 Неделя выдалась насыщенной, поэтому мы публикуем все посты, "
-        "которые были опубликованы за это время, чтобы вы могли легче найти то, "
-        "что вам действительно интересно.</b>\n\n"
+    "<b>📝 Неделя выдалась насыщенной, поэтому мы публикуем все посты, "
+    "которые были опубликованы за это время, чтобы вы могли легче найти то, "
+    "что вам действительно интересно.</b>\n\n"
     )
+    
     full_text = intro + "\n".join(posts)
     chunks = []
     buffer = ""
+    max_length = 4096  # Максимальная длина сообщения в Telegram
     for line in full_text.splitlines(keepends=True):
-        if len(buffer) + len(line) > 4000:
+        if len(buffer.encode('utf-8')) + len(line.encode('utf-8')) > max_length:
             chunks.append(buffer)
             buffer = ""
         buffer += line
@@ -160,7 +168,7 @@ async def resolve_source_entity():
         "или ссылку вида https://t.me/c/<id>/<msg> и добавьте аккаунт в канал."
     )
 
-async def collect_posts(date_start: datetime.date, date_end: datetime.date):
+async def collect_posts(date_start: datetime.date, date_end: datetime.date, exclude_times: Optional[list] = None):
     moscow_tz = pytz.timezone("Europe/Moscow")
     await client.start()
     all_posts = []
@@ -177,9 +185,16 @@ async def collect_posts(date_start: datetime.date, date_end: datetime.date):
         if not msg.date:
             continue
 
-        msg_date = msg.date.astimezone(moscow_tz).date()
+        msg_datetime = msg.date.astimezone(moscow_tz)
+        msg_date = msg_datetime.date()
         if not (date_start <= msg_date <= date_end):
             continue
+
+        # Проверка на исключение по конкретному времени
+        if exclude_times:
+            msg_time = msg_datetime.strftime("%H:%M")
+            if msg_time in exclude_times:
+                continue
 
         text = (msg.message or getattr(msg, "text", "") or "").strip()
         if not text:
@@ -188,7 +203,6 @@ async def collect_posts(date_start: datetime.date, date_end: datetime.date):
         preview = html.escape(text.splitlines()[0])
 
         # Правильная ссылка на приватный канал: https://t.me/c/<channel_id>/<msg_id>
-        # channel_id можно взять из peer_id.channel_id, иначе из entity.id
         channel_id = None
         if getattr(msg, "peer_id", None) and getattr(msg.peer_id, "channel_id", None):
             channel_id = msg.peer_id.channel_id
@@ -200,33 +214,59 @@ async def collect_posts(date_start: datetime.date, date_end: datetime.date):
 
     return all_posts
 
-
 @dp.message(Command("get_posts"))
 async def get_posts(message: Message):
-
+    """
+    Команда для получения постов за указанный период.
+    Поддерживает исключение постов по конкретному времени через параметр exclude_time.
+    Формат: /get_posts 28.07 03.08 [exclude_time 09:00,15:00]
+    """
     if not is_authorized(message):
         await message.answer("❌ У вас нет доступа к этому боту.")
         return
 
     args = message.text.split()
-    if len(args) != 3:
-        await message.answer("Формат: /get_posts 28.07 03.08")
+    exclude_times = None
+
+    if len(args) < 3:
+        await message.answer("Формат: /get_posts 28.07 03.08 [exclude_time HH:MM,HH:MM]")
         return
+
+    current_year = datetime.now().year
     try:
-        date_start = datetime.strptime(args[1] + ".2025", "%d.%m.%Y").date()
-        date_end = datetime.strptime(args[2] + ".2025", "%d.%m.%Y").date()
+        date_start = datetime.strptime(args[1] + f".{current_year}", "%d.%m.%Y").date()
+        date_end = datetime.strptime(args[2] + f".{current_year}", "%d.%m.%Y").date()
     except ValueError:
         await message.answer("Неверный формат даты. Используй: 28.07 03.08")
         return
 
+    if date_start > date_end:
+        await message.answer("Дата начала не может быть позже даты окончания.")
+        return
+
+    # Проверка на наличие исключения по конкретному времени
+    if len(args) > 3 and args[3].lower() == "exclude_time":
+        if len(args) != 5:
+            await message.answer("Укажите время для исключения в формате HH:MM,HH:MM")
+            return
+        try:
+            times = args[4].split(",")
+            exclude_times = []
+            for t in times:
+                t = t.strip()
+                datetime.strptime(t, "%H:%M")  # Проверка формата
+                exclude_times.append(t)
+        except ValueError:
+            await message.answer("Неверный формат времени. Используй: HH:MM,HH:MM (например, 09:00,15:00)")
+            return
+
     await message.answer("🔍 Ищу посты...")
-    posts = await collect_posts(date_start, date_end)
+    posts = await collect_posts(date_start, date_end, exclude_times)
     if posts:
         for chunk in build_report(posts):
             await message.answer(chunk)
     else:
         await message.answer("Постов не найдено за указанный период.")
-
 
 @dp.message(Command("schedule_report"))
 async def schedule_report(message: Message):
@@ -234,19 +274,22 @@ async def schedule_report(message: Message):
         await message.answer("❌ У вас нет доступа к этому боту.")
         return
 
-    parts = message.text.split(maxsplit=2)
+    parts = message.text.split()
+    moscow_tz = pytz.timezone("Europe/Moscow")
+    current_year = datetime.now().year
+
     if len(parts) == 1:
         await message.answer(
             "Форматы:\n"
-            "- /schedule_report now — опубликовать сейчас\n"
-            "- /schedule_report 03.08.2025 12:00 — опубликовать в указанное время"
+            "- /schedule_report now — опубликовать сейчас (за последние 7 дней)\n"
+            "- /schedule_report now exclude_time 09:00,15:00 — опубликовать сейчас с исключением\n"
+            "- /schedule_report 28.07 03.08 exclude_time 09:00,15:00 at 05.08.2025 12:00 — с диапазоном и исключением\n"
+            "- /schedule_report 03.08.2025 12:00 — опубликовать в указанное время (за последние 7 дней)"
         )
         return
 
-    moscow_tz = pytz.timezone("Europe/Moscow")
-
     # Мгновенная публикация
-    if len(parts) == 2 and parts[1].lower() in ("now", "сейчас"):
+    if len(parts) >= 2 and parts[1].lower() in ("now", "сейчас"):
         try:
             target_chat = get_target_chat()
         except Exception as e:
@@ -254,16 +297,35 @@ async def schedule_report(message: Message):
             return
 
         run_time = moscow_tz.localize(datetime.now())
+        date_end = run_time.date()
+        date_start = date_end - timedelta(days=6)
+        exclude_times = None
+
+        # Проверка на наличие исключения по времени
+        if len(parts) > 3 and parts[2].lower() == "exclude_time":
+            try:
+                times = parts[3].split(",")
+                exclude_times = []
+                for t in times:
+                    t = t.strip()
+                    datetime.strptime(t, "%H:%M")  # Проверка формата
+                    exclude_times.append(t)
+            except ValueError:
+                await message.answer("Неверный формат времени. Используй: HH:MM,HH:MM (например, 09:00,15:00)")
+                return
+
         await message.answer("⏱ Публикую отчёт сейчас…")
-        await run_scheduled_report(run_time, target_chat)
+        await run_scheduled_report(run_time, target_chat, date_start, date_end, exclude_times)
         return
 
-    # Публикация по времени
+    # Публикация по времени (без диапазона дат, по умолчанию последние 7 дней)
     if len(parts) == 3:
         date_str, time_str = parts[1], parts[2]
         try:
             run_time = moscow_tz.localize(datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M"))
             target_chat = get_target_chat()
+            date_end = run_time.date()
+            date_start = date_end - timedelta(days=6)
         except ValueError:
             await message.answer("Неверный формат даты/времени. Пример: /schedule_report 03.08.2025 12:00")
             return
@@ -271,18 +333,59 @@ async def schedule_report(message: Message):
             await message.answer(f"⚠️ {e}")
             return
 
-        await message.answer(f"✅ Отчёт будет отправлен {run_time.strftime('%d.%m.%Y %H:%M')}")
-        asyncio.create_task(run_scheduled_report(run_time, target_chat))
+        await message.answer(f"✅ Отчёт будет отправлен {run_time.strftime('%d.%m.%Y %H:%M')} (за последние 7 дней)")
+        asyncio.create_task(run_scheduled_report(run_time, target_chat, date_start, date_end))
         return
 
-    await message.answer(
-        "Неверный формат. Используйте:\n"
-        "- /schedule_report now\n"
-        "- /schedule_report ДД.ММ.ГГГГ ЧЧ:ММ"
-    )
+    # Публикация с диапазоном дат и исключением по времени
+    if len(parts) >= 5:
+        try:
+            date_start = datetime.strptime(parts[1] + f".{current_year}", "%d.%m.%Y").date()
+            date_end = datetime.strptime(parts[2] + f".{current_year}", "%d.%m.%Y").date()
+            exclude_times = None
+
+            if date_start > date_end:
+                await message.answer("Дата начала не может быть позже даты окончания.")
+                return
+
+            # Проверка на наличие исключения по времени
+            idx = 3
+            if len(parts) > 5 and parts[idx].lower() == "exclude_time":
+                times = parts[idx + 1].split(",")
+                exclude_times = []
+                for t in times:
+                    t = t.strip()
+                    datetime.strptime(t, "%H:%M")  # Проверка формата
+                    exclude_times.append(t)
+                idx += 2
+
+            # Проверка на наличие времени публикации
+            if len(parts) > idx + 1 and parts[idx].lower() == "at":
+                date_str, time_str = parts[idx + 1], parts[idx + 2]
+                run_time = moscow_tz.localize(datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M"))
+            else:
+                run_time = moscow_tz.localize(datetime.now())
+
+            target_chat = get_target_chat()
+        except ValueError:
+            await message.answer("Неверный формат. Пример: /schedule_report 28.07 03.08 exclude_time 09:00,15:00 at 05.08.2025 12:00")
+            return
+        except Exception as e:
+            await message.answer(f"⚠️ {e}")
+            return
+
+        await message.answer(f"✅ Отчёт будет отправлен {run_time.strftime('%d.%m.%Y %H:%M')} за период с {date_start.strftime('%d.%m.%Y')} по {date_end.strftime('%d.%m.%Y')}")
+        asyncio.create_task(run_scheduled_report(run_time, target_chat, date_start, date_end, exclude_times))
+        return
+
+    await message.answer("Неверный формат. Используйте примеры из описания.")
 
 @dp.message(Command("set_target"))
 async def set_target(message: Message):
+    """
+    Команда для установки целевого канала для публикации отчётов.
+    Формат: /set_target -1002783609929 или /set_target @username
+    """
     if not is_authorized(message):
         await message.answer("❌ У вас нет доступа к этому боту.")
         return
@@ -323,31 +426,32 @@ async def set_target(message: Message):
     title = getattr(chat, "title", None) or getattr(chat, "full_name", "чат")
     await message.answer(f"✅ Целевой канал установлен: {title} (id={new_target})")
 
-
-async def run_scheduled_report(run_time: datetime, target_chat: Union[int, str]):
+async def run_scheduled_report(run_time: datetime, target_chat: Union[int, str], date_start: datetime.date, date_end: datetime.date, exclude_times: Optional[list] = None):
     from datetime import timezone
     utc_now = datetime.now(timezone.utc)
     sleep_duration = (run_time.astimezone(timezone.utc) - utc_now).total_seconds()
     if sleep_duration > 0:
         await asyncio.sleep(sleep_duration)
 
-    date_end = run_time.date()
-    date_start = date_end - timedelta(days=6)
+    posts = await collect_posts(date_start, date_end, exclude_times)
 
-    posts = await collect_posts(date_start, date_end)
-
-    if posts:
-        for chunk in build_report(posts):
-            await bot.send_message(chat_id=target_chat, text=chunk, disable_web_page_preview=True)
-    else:
-        await bot.send_message(chat_id=target_chat, text="Постов за неделю не найдено.", disable_web_page_preview=True)
-
+    try:
+        if posts:
+            for chunk in build_report(posts):
+                await bot.send_message(chat_id=target_chat, text=chunk, disable_web_page_preview=True)
+        else:
+            await bot.send_message(chat_id=target_chat, text="Постов за указанный период не найдено.", disable_web_page_preview=True)
+    except Exception as e:
+        print(f"Ошибка при отправке отчёта: {e}")
+        await bot.send_message(chat_id=ALLOWED_USER_ID, text=f"Ошибка при отправке отчёта: {e}")
 
 async def main():
+    """
+    Основная функция для запуска бота.
+    """
     init_target_chat()
     await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
-
 
 if __name__ == "__main__":
     asyncio.run(main())
