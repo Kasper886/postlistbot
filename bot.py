@@ -102,7 +102,7 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher()
-client = TelegramClient(StringSession(), API_ID, API_HASH)
+client = TelegramClient(StringSession(os.environ["TELETHON_SESSION"]), API_ID, API_HASH)
 
 def is_authorized(message: Message) -> bool:
     return message.from_user.id == ALLOWED_USER_ID  # Проверяем пользователя, имеющего доступ к боту
@@ -141,7 +141,9 @@ async def resolve_source_entity():
     - SOURCE_CHANNEL = https://t.me/c/2746218295/199 (вытащит 2746218295 и найдёт по диалогам)
     Требование: аккаунт Telethon должен состоять в канале.
     """
-    await client.start(bot_token=BOT_TOKEN)
+    await client.connect()
+    if not await client.is_user_authorized(): raise RuntimeError("Session expired")
+        
     src = (SOURCE_CHANNEL or "").strip()
     # Попытка по username / прямой ссылке на публичный
     if src.startswith("@") or (src.startswith("https://t.me/") and "/c/" not in src):
@@ -171,7 +173,8 @@ async def resolve_source_entity():
 
 async def collect_posts(date_start: datetime.date, date_end: datetime.date, exclude_times: Optional[list] = None):
     moscow_tz = pytz.timezone("Europe/Moscow")
-    await client.start(bot_token=BOT_TOKEN)
+    await client.connect()
+    if not await client.is_user_authorized(): raise RuntimeError("Session expired")
     all_posts = []
 
     # 1) Получаем entity канала
