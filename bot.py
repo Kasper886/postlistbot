@@ -142,7 +142,9 @@ async def resolve_source_entity():
     Требование: аккаунт Telethon должен состоять в канале.
     """
     await client.connect()
-    if not await client.is_user_authorized(): raise RuntimeError("Session expired")
+    if not await client.is_user_authorized():
+        raise RuntimeError("Сессия не авторизована. Сгенерируйте TELETHON_SESSION заново локально.")
+
         
     src = (SOURCE_CHANNEL or "").strip()
     # Попытка по username / прямой ссылке на публичный
@@ -174,7 +176,9 @@ async def resolve_source_entity():
 async def collect_posts(date_start: datetime.date, date_end: datetime.date, exclude_times: Optional[list] = None):
     moscow_tz = pytz.timezone("Europe/Moscow")
     await client.connect()
-    if not await client.is_user_authorized(): raise RuntimeError("Session expired")
+    if not await client.is_user_authorized():
+        raise RuntimeError("Сессия не авторизована. Сгенерируйте TELETHON_SESSION заново локально.")
+
     all_posts = []
 
     # 1) Получаем entity канала
