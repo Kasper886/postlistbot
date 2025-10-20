@@ -112,7 +112,7 @@ def build_report(posts: List[str]) -> List[str]:
     """
     posts.reverse()
     intro = (
-    "<b>📝 Неделя выдалась насыщенной, поэтому мы публикуем все посты, "
+    "<b>📝Неделя выдалась насыщенной, поэтому мы публикуем все посты, "
     "которые были опубликованы за это время, чтобы вы могли легче найти то, "
     "что вам действительно интересно.</b>\n\n"
     )
@@ -214,6 +214,41 @@ async def collect_posts(date_start: datetime.date, date_end: datetime.date, excl
 
     return all_posts
 
+@dp.message(Command("set_source"))
+async def set_source(message: Message):
+    if not is_authorized(message):
+        await message.answer("❌ У вас нет доступа к этому боту.")
+        return
+
+    parts = message.text.split(maxsplit=1)
+    if len(parts) != 2:
+        await message.answer(
+            "Укажите исходный канал для сбора данных:\n"
+            "- /set_source -1002783609929\n"
+            "- /set_source @username\n"
+            "- /set_source https://t.me/c/2783609929/199"
+        )
+        return
+
+    raw = parts[1].strip()
+    try:
+        new_source = parse_chat_ref(raw)
+    except Exception as e:
+        await message.answer(f"⚠️ Некорректный идентификатор: {e}")
+        return
+
+    global SOURCE_CHANNEL_RUNTIME
+    SOURCE_CHANNEL_RUNTIME = new_source
+    save_source_channel_to_disk(new_source)  # Сохранение в файл/конфигурацию
+    await message.answer(f"✅ Исходный канал для сбора установлен: {new_source}.")
+
+def save_source_channel_to_disk(value: Union[int, str]) -> None:
+    try:
+        with open("source_channel.json", "w", encoding="utf-8") as f:
+            json.dump({"source": value}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 @dp.message(Command("get_posts"))
 async def get_posts(message: Message):
     """
@@ -269,116 +304,46 @@ async def get_posts(message: Message):
         await message.answer("Постов не найдено за указанный период.")
 
 @dp.message(Command("schedule_report"))
-async def schedule_report(message: Message):
-    if not is_authorized(message):
-        await message.answer("❌ У вас нет доступа к этому боту.")
+async def schedule_report(message):
+    # Разбираем текст сообщения от пользователя
+    parts = message.text.strip().split(" ")
+    if len(parts) < 3:  # Ожидаем минимум 3 аргумента
+        await message.answer("❗ Укажите правильный формат команды. Пример: /schedule_report DD.MM.YYYY DD.MM.YYYY exclude_time HH:MM,HH:MM")
+        return
+    
+    try:
+        # Чтение диапазона дат с конца
+        current_year = datetime.now().year
+        date_start = datetime.strptime(parts[1] + f".{current_year}", "%d.%m.%Y").date()
+        date_end = datetime.strptime(parts[2] + f".{current_year}", "%d.%m.%Y").date()
+    except ValueError:
+        await message.answer("⚠️ Неверный формат дат. Используйте DD.MM.YYYY.")
         return
 
-    parts = message.text.split()
-    moscow_tz = pytz.timezone("Europe/Moscow")
-    current_year = datetime.now().year
-
-    if len(parts) == 1:
-        await message.answer(
-            "Форматы:\n"
-            "- /schedule_report now — опубликовать сейчас (за последние 7 дней)\n"
-            "- /schedule_report now exclude_time 09:00,15:00 — опубликовать сейчас с исключением\n"
-            "- /schedule_report 28.07 03.08 exclude_time 09:00,15:00 at 05.08.2025 12:00 — с диапазоном и исключением\n"
-            "- /schedule_report 03.08.2025 12:00 — опубликовать в указанное время (за последние 7 дней)"
-        )
-        return
-
-    # Мгновенная публикация
-    if len(parts) >= 2 and parts[1].lower() in ("now", "сейчас"):
+    exclude_times = None
+    if len(parts) >= 5 and parts[3].lower() == "exclude_time":
+        # Парсим исключенные времена
         try:
-            target_chat = get_target_chat()
-        except Exception as e:
-            await message.answer(f"⚠️ {e}")
-            return
-
-        run_time = moscow_tz.localize(datetime.now())
-        date_end = run_time.date()
-        date_start = date_end - timedelta(days=6)
-        exclude_times = None
-
-        # Проверка на наличие исключения по времени
-        if len(parts) > 3 and parts[2].lower() == "exclude_time":
-            try:
-                times = parts[3].split(",")
-                exclude_times = []
-                for t in times:
-                    t = t.strip()
-                    datetime.strptime(t, "%H:%M")  # Проверка формата
-                    exclude_times.append(t)
-            except ValueError:
-                await message.answer("Неверный формат времени. Используй: HH:MM,HH:MM (например, 09:00,15:00)")
-                return
-
-        await message.answer("⏱ Публикую отчёт сейчас…")
-        await run_scheduled_report(run_time, target_chat, date_start, date_end, exclude_times)
-        return
-
-    # Публикация по времени (без диапазона дат, по умолчанию последние 7 дней)
-    if len(parts) == 3:
-        date_str, time_str = parts[1], parts[2]
-        try:
-            run_time = moscow_tz.localize(datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M"))
-            target_chat = get_target_chat()
-            date_end = run_time.date()
-            date_start = date_end - timedelta(days=6)
+            exclude_times = [t.strip() for t in parts[4].split(",")]
+            for t in exclude_times:
+                datetime.strptime(t, "%H:%M")  # Проверяем валидность времени
         except ValueError:
-            await message.answer("Неверный формат даты/времени. Пример: /schedule_report 03.08.2025 12:00")
-            return
-        except Exception as e:
-            await message.answer(f"⚠️ {e}")
+            await message.answer("⚠️ Неверный формат времени. Укажите время в формате HH:MM,HH:MM (например, 09:00,15:30).")
             return
 
-        await message.answer(f"✅ Отчёт будет отправлен {run_time.strftime('%d.%m.%Y %H:%M')} (за последние 7 дней)")
-        asyncio.create_task(run_scheduled_report(run_time, target_chat, date_start, date_end))
+    # Вывод для отладки (можно убрать в релизной версии)
+    print(f"Дата начала: {date_start}, Дата окончания: {date_end}, Исключенные времена: {exclude_times}")
+
+    # Планируем выполнение отчета
+    if date_start > date_end:
+        await message.answer("❗ Дата начала не может быть позже даты окончания.")
         return
 
-    # Публикация с диапазоном дат и исключением по времени
-    if len(parts) >= 5:
-        try:
-            date_start = datetime.strptime(parts[1] + f".{current_year}", "%d.%m.%Y").date()
-            date_end = datetime.strptime(parts[2] + f".{current_year}", "%d.%m.%Y").date()
-            exclude_times = None
-
-            if date_start > date_end:
-                await message.answer("Дата начала не может быть позже даты окончания.")
-                return
-
-            # Проверка на наличие исключения по времени
-            idx = 3
-            if len(parts) > 5 and parts[idx].lower() == "exclude_time":
-                times = parts[idx + 1].split(",")
-                exclude_times = []
-                for t in times:
-                    t = t.strip()
-                    datetime.strptime(t, "%H:%M")  # Проверка формата
-                    exclude_times.append(t)
-                idx += 2
-
-            # Проверка на наличие времени публикации
-            if len(parts) > idx + 1 and parts[idx].lower() == "at":
-                date_str, time_str = parts[idx + 1], parts[idx + 2]
-                run_time = moscow_tz.localize(datetime.strptime(f"{date_str} {time_str}", "%d.%m.%Y %H:%M"))
-            else:
-                run_time = moscow_tz.localize(datetime.now())
-
-            target_chat = get_target_chat()
-        except ValueError:
-            await message.answer("Неверный формат. Пример: /schedule_report 28.07 03.08 exclude_time 09:00,15:00 at 05.08.2025 12:00")
-            return
-        except Exception as e:
-            await message.answer(f"⚠️ {e}")
-            return
-
-        await message.answer(f"✅ Отчёт будет отправлен {run_time.strftime('%d.%m.%Y %H:%M')} за период с {date_start.strftime('%d.%m.%Y')} по {date_end.strftime('%d.%m.%Y')}")
-        asyncio.create_task(run_scheduled_report(run_time, target_chat, date_start, date_end, exclude_times))
-        return
-
-    await message.answer("Неверный формат. Используйте примеры из описания.")
+    # Планируем задачу на выполнение
+    run_time = datetime.now()  # Пример запуска сразу, если нужно добавить отложенный запуск - измените это
+    target_chat = get_target_chat() #id чата, куда будет отправляться отчет
+    asyncio.create_task(run_scheduled_report(run_time, target_chat, date_start, date_end, exclude_times))
+    await message.answer("✅ Отчет успешно запланирован!")
 
 @dp.message(Command("set_target"))
 async def set_target(message: Message):
