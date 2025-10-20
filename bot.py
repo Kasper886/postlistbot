@@ -13,6 +13,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 from aiogram.client.default import DefaultBotProperties
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 import pytz
 import logging
 
@@ -101,7 +102,7 @@ bot = Bot(
     default=DefaultBotProperties(parse_mode=ParseMode.HTML)
 )
 dp = Dispatcher()
-client = TelegramClient("session", API_ID, API_HASH)
+client = TelegramClient(StringSession(), API_ID, API_HASH)
 
 def is_authorized(message: Message) -> bool:
     return message.from_user.id == ALLOWED_USER_ID  # Проверяем пользователя, имеющего доступ к боту
@@ -140,7 +141,7 @@ async def resolve_source_entity():
     - SOURCE_CHANNEL = https://t.me/c/2746218295/199 (вытащит 2746218295 и найдёт по диалогам)
     Требование: аккаунт Telethon должен состоять в канале.
     """
-    await client.start()
+    await client.start(bot_token=BOT_TOKEN)
     src = (SOURCE_CHANNEL or "").strip()
     # Попытка по username / прямой ссылке на публичный
     if src.startswith("@") or (src.startswith("https://t.me/") and "/c/" not in src):
@@ -170,7 +171,7 @@ async def resolve_source_entity():
 
 async def collect_posts(date_start: datetime.date, date_end: datetime.date, exclude_times: Optional[list] = None):
     moscow_tz = pytz.timezone("Europe/Moscow")
-    await client.start()
+    await client.start(bot_token=BOT_TOKEN)
     all_posts = []
 
     # 1) Получаем entity канала
